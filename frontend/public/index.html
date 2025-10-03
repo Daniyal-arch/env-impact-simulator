@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    
+    <meta
+      name="description"
+      content="Forest Impact Simulator - Analyze forest loss scenarios"
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              forest: {
+                50: '#f0fdf4',
+                500: '#22c55e', 
+                600: '#16a34a',
+                700: '#15803d'
+              }
+            }
+          }
+        }
+      }
+    </script>
+    
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    <title>Forest Impact Simulator</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from typing import Dict, List, Any
 
+
 load_dotenv()
 
 router = APIRouter()
