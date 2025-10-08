@@ -57,18 +57,21 @@ map.eachLayer((layer) => {
 
     // Add country boundary if geometry provided
     if (geometry) {
-      const geoJsonLayer = L.geoJSON(geometry, {
-        style: {
-          color: '#ef4444',
-          weight: 2,
-          fillOpacity: 0.1
-        }
-      }).addTo(map);
-
-      // Fit map to country bounds
-      map.fitBounds(geoJsonLayer.getBounds());
+  const geoJsonLayer = L.geoJSON(geometry, {
+    style: {
+      color: '#ef4444',
+      weight: 2,
+      fillOpacity: 0,
+      fillColor: 'transparent'
     }
+  }).addTo(map);
 
+  // Fit map to country bounds with padding
+  map.fitBounds(geoJsonLayer.getBounds(), {
+    padding: [50, 50],
+    maxZoom: 6
+  });
+}
     return () => {
       // Cleanup
     };

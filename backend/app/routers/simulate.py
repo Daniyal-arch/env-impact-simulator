@@ -382,6 +382,7 @@ def simulate_forest_loss_dual(country_iso: str, loss_fraction: float, target_yea
         "total_area_ha": area_ha,
         "forest_area_ha": forest_area,
         "baseline_emissions_Mg_CO2e": emissions,
+        "geometry": geometry,
         "analysis_period": {
             "historical_years": f"{min(r['year'] for r in historical)}-{max(r['year'] for r in historical)}",
             "projection_target_year": target_year,

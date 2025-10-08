@@ -2,8 +2,8 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Layout from './components/common/Layout';
 import Home from './pages/Home';
-import Simulate from './pages/Simulate';
-import TimeSeries from './pages/TimeSeries';
+import NLPSimulate from './pages/NLPSimulate';
+
 
 function App() {
   return (
@@ -11,8 +11,8 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/simulate" element={<Simulate />} />
-          <Route path="/timeseries" element={<TimeSeries />} />
+          <Route path="/nlp" element={<NLPSimulate />} />
+          
         </Routes>
       </Layout>
     </Router>

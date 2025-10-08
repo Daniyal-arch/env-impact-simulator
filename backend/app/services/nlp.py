@@ -1,11 +1,13 @@
 """
 Natural Language Processing service for forest loss queries using Google Gemini API.
+Enhanced to support both historical and projection queries.
 """
 
 import json
 import re
 import google.generativeai as genai
 from typing import Dict, Any
+from datetime import datetime
 from app.core.config import settings
 from app.utils.country_lookup import COUNTRY_NAME_TO_ISO3
 
@@ -62,28 +64,13 @@ def normalize_country_input(country_input: str) -> str:
     raise ValueError(f"Country '{country_input}' not recognized. Try: {suggestions}")
 
 
-# Check available models function
-def list_available_models():
-    """List all available Gemini models for debugging."""
-    try:
-        models = genai.list_models()
-        available_models = []
-        for model in models:
-            if hasattr(model, 'name') and 'generateContent' in getattr(model, 'supported_generation_methods', []):
-                available_models.append(model.name)
-        return available_models
-    except Exception as e:
-        return f"Error listing models: {e}"
-
-
 def parse_nl_query(query: str) -> Dict[str, Any]:
     """
-    Parse a natural language forest-loss query using Gemini with model fallback.
+    Parse natural language query for BOTH historical and projection queries.
     """
     
     # Handle different input types
     if isinstance(query, dict):
-        # If query is a dict, extract the actual query string
         if 'query' in query:
             query = query['query']
         elif 'text' in query:
@@ -101,37 +88,35 @@ def parse_nl_query(query: str) -> Dict[str, Any]:
     # Clean the query string
     query = str(query).strip()
     
-    # Enhanced prompt for better JSON extraction
+    # Enhanced prompt that handles BOTH query types
     prompt = f"""
-    Parse this forest loss query into structured data: "{query}"
+Parse this forest query: "{query}"
+
+Determine if this is a HISTORICAL query (asking about past data) or a PROJECTION query (predicting future).
+
+For HISTORICAL queries (e.g., "Show Brazil forest loss", "What is Pakistan's deforestation data", "Display statistics"):
+Return: {{"country": "country name", "query_type": "historical"}}
+
+For PROJECTION queries (e.g., "What if Brazil loses 10% by 2030", "Predict 5% loss in 3 years"):
+Return: {{"country": "country name", "forest_loss_percent": number, "years": number, "query_type": "projection"}}
+
+Examples:
+- "Show me Brazil's forest loss statistics" → {{"country": "Brazil", "query_type": "historical"}}
+- "What is Pakistan's historical data?" → {{"country": "Pakistan", "query_type": "historical"}}
+- "Display Indonesia deforestation data" → {{"country": "Indonesia", "query_type": "historical"}}
+- "Brazil 10% deforestation by 2030" → {{"country": "Brazil", "forest_loss_percent": 10, "years": 6, "query_type": "projection"}}
+
+Return ONLY valid JSON, no other text.
+"""
     
-    Extract these components:
-    - Country name (any format - name, code, etc.)
-    - Forest loss percentage (as a number)
-    - Time period in years from now
-    
-    Return ONLY a valid JSON object with exactly these keys:
-    {{
-        "country": "country name or code from the query",
-        "forest_loss_percent": number (just the percentage value),
-        "years": number (years into the future)
-    }}
-    
-    Examples:
-    - "What if Pakistan loses 5% forest in 3 years" → {{"country": "Pakistan", "forest_loss_percent": 5, "years": 3}}
-    - "Brazil 10% deforestation by 2030" → {{"country": "Brazil", "forest_loss_percent": 10, "years": 6}}
-    
-    Return only the JSON object, no other text.
-    """
-    
-    # Try multiple model names in order of preference - UPDATED with your available models
+    # Try multiple model names in order of preference
     model_names_to_try = [
-        "models/gemini-2.0-flash",           # Fast and efficient
-        "models/gemini-2.5-flash",           # Latest flash model  
-        "models/gemini-2.0-flash-001",       # Specific version
-        "models/gemini-flash-latest",        # Latest alias
-        "models/gemini-2.5-pro",             # More powerful if needed
-        "models/gemini-pro-latest",          # Pro alias
+        "models/gemini-2.0-flash",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.0-flash-001",
+        "models/gemini-flash-latest",
+        "models/gemini-2.5-pro",
+        "models/gemini-pro-latest"
     ]
     
     last_error = None
@@ -144,10 +129,9 @@ def parse_nl_query(query: str) -> Dict[str, Any]:
             # Generate response
             response = model.generate_content(prompt)
             
-            # If we get here, the model worked
             print(f"Successfully used model: {model_name}")
             
-            # Extract response text with better error handling
+            # Extract response text
             output_text = None
             
             try:
@@ -161,100 +145,96 @@ def parse_nl_query(query: str) -> Dict[str, Any]:
                     elif hasattr(candidate, 'text'):
                         output_text = str(candidate.text)
             except Exception as extract_error:
-                print(f"Error extracting text from response: {extract_error}")
+                print(f"Error extracting text: {extract_error}")
                 continue
             
             if not output_text:
                 print(f"No output text from model {model_name}")
-                continue  # Try next model
+                continue
             
-            # Clean the response - sometimes Gemini adds extra text
+            # Clean the response
             cleaned_text = clean_json_response(output_text)
             
             # Parse the JSON
             try:
                 parsed = json.loads(cleaned_text)
                 
-                # Validate that parsed is a dict
                 if not isinstance(parsed, dict):
                     print(f"Parsed result is not a dict: {type(parsed)}")
                     continue
                 
-                # Validate required keys
-                required_keys = ["country", "forest_loss_percent", "years"]
-                missing_keys = [key for key in required_keys if key not in parsed]
+                # Validate country (always required)
+                country_value = parsed.get("country")
+                if not country_value:
+                    return {"status": "error", "error": "Country is required"}
                 
-                if missing_keys:
-                    return {
-                        "status": "error", 
-                        "error": f"Missing required keys: {', '.join(missing_keys)}"
-                    }
-                
-                # Validate and convert country to ISO3
+                # Normalize country to ISO3
                 try:
-                    country_value = parsed["country"]
-                    if not isinstance(country_value, str):
-                        country_value = str(country_value)
-                    
-                    iso3_country = normalize_country_input(country_value)
+                    iso3_country = normalize_country_input(str(country_value))
                     parsed["country"] = iso3_country
                 except ValueError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Country resolution failed: {str(e)}"
-                    }
-                except Exception as e:
-                    return {
-                        "status": "error",
-                        "error": f"Error processing country '{parsed.get('country', 'unknown')}': {str(e)}"
-                    }
+                    return {"status": "error", "error": f"Country resolution failed: {str(e)}"}
                 
-                # Validate numeric values
-                try:
-                    parsed["forest_loss_percent"] = float(parsed["forest_loss_percent"])
-                    parsed["years"] = int(parsed["years"])
-                except (ValueError, TypeError) as e:
+                # Determine query type
+                query_type = parsed.get("query_type", "historical")
+                
+                # Build response based on query type
+                if query_type == "projection":
+                    # PROJECTION QUERY - validate projection parameters
+                    if "forest_loss_percent" not in parsed or "years" not in parsed:
+                        return {
+                            "status": "error",
+                            "error": "Projection queries require forest_loss_percent and years"
+                        }
+                    
+                    try:
+                        parsed["forest_loss_percent"] = float(parsed["forest_loss_percent"])
+                        parsed["years"] = int(parsed["years"])
+                    except (ValueError, TypeError):
+                        return {
+                            "status": "error",
+                            "error": "forest_loss_percent must be numeric and years must be integer"
+                        }
+                    
+                    # Validate ranges
+                    if not (0 < parsed["forest_loss_percent"] <= 100):
+                        return {"status": "error", "error": "forest_loss_percent must be between 0 and 100"}
+                    
+                    if not (1 <= parsed["years"] <= 50):
+                        return {"status": "error", "error": "years must be between 1 and 50"}
+                    
+                    # Calculate target year
+                    current_year = datetime.now().year
+                    target_year = current_year + parsed["years"]
+                    
                     return {
-                        "status": "error",
-                        "error": f"Numeric validation failed: forest_loss_percent must be numeric and years must be integer. Error: {str(e)}"
+                        "status": "success",
+                        "nl_query": query,
+                        "model_used": model_name,
+                        "structured_scenario": {
+                            "country": parsed["country"],
+                            "forest_loss_percent": parsed["forest_loss_percent"],
+                            "target_year": target_year,
+                            "years_from_now": parsed["years"]
+                        }
                     }
-                
-                # Validate ranges
-                if not (0 < parsed["forest_loss_percent"] <= 100):
+                else:
+                    # HISTORICAL QUERY - no projection parameters needed
                     return {
-                        "status": "error",
-                        "error": "forest_loss_percent must be between 0 and 100"
+                        "status": "success",
+                        "nl_query": query,
+                        "model_used": model_name,
+                        "structured_scenario": {
+                            "country": parsed["country"]
+                        }
                     }
-                
-                if not (1 <= parsed["years"] <= 50):
-                    return {
-                        "status": "error",
-                        "error": "years must be between 1 and 50"
-                    }
-                
-                # Calculate target year
-                from datetime import datetime
-                current_year = datetime.now().year
-                target_year = current_year + parsed["years"]
-                
-                return {
-                    "status": "success",
-                    "nl_query": query,
-                    "model_used": model_name,
-                    "structured_scenario": {
-                        "country": parsed["country"],
-                        "forest_loss_percent": parsed["forest_loss_percent"],
-                        "target_year": target_year,
-                        "years_from_now": parsed["years"]
-                    }
-                }
                 
             except json.JSONDecodeError as e:
                 print(f"JSON decode error: {e}")
-                print(f"Cleaned text was: {cleaned_text[:500]}")
-                continue  # Try next model
+                print(f"Cleaned text: {cleaned_text[:500]}")
+                continue
             except Exception as e:
-                print(f"Unexpected error processing response: {e}")
+                print(f"Unexpected error: {e}")
                 continue
         
         except Exception as e:
@@ -262,201 +242,36 @@ def parse_nl_query(query: str) -> Dict[str, Any]:
             print(f"Model {model_name} failed: {e}")
             continue
     
-    # If all models failed, return comprehensive error
+    # If all models failed
     return {
         "status": "error",
         "error": f"All Gemini models failed. Last error: {last_error}",
-        "tried_models": model_names_to_try,
-        "debug_info": "All available models were attempted but failed"
+        "tried_models": model_names_to_try
     }
 
 
 def clean_json_response(text: str) -> str:
-    """
-    Clean Gemini response to extract valid JSON.
-    Sometimes Gemini adds extra text before/after the JSON.
-    """
+    """Clean Gemini response to extract valid JSON."""
     
-    # Remove markdown code blocks if present
+    # Remove markdown code blocks
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*$', '', text)
     
-    # Try to find JSON object in the response
+    # Find JSON object
     json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
     matches = re.findall(json_pattern, text, re.DOTALL)
     
     if matches:
         return matches[0].strip()
     
-    # If no JSON pattern found, return cleaned text
     return text.strip()
 
 
-def suggest_query_format(query: str) -> Dict[str, Any]:
-    """
-    Provide suggestions for improving a natural language query.
-    """
-    
-    suggestions = []
-    
-    # Check for common components
-    has_country = any(word.lower() in query.lower() for word in [
-        'pakistan', 'brazil', 'indonesia', 'india', 'usa', 'china', 'russia'
-    ])
-    
-    has_percentage = any(char in query for char in ['%', 'percent'])
-    has_number = any(char.isdigit() for char in query)
-    has_time = any(word.lower() in query.lower() for word in [
-        'year', 'years', 'by', '2030', '2025', '2027', 'future'
-    ])
-    
-    if not has_country:
-        suggestions.append("Specify a country name (e.g., 'Pakistan', 'Brazil', 'USA')")
-    
-    if not has_percentage and not has_number:
-        suggestions.append("Include a forest loss percentage (e.g., '5%', '10 percent')")
-    
-    if not has_time:
-        suggestions.append("Specify a time frame (e.g., 'in 5 years', 'by 2030')")
-    
-    example_queries = [
-        "What if Pakistan loses 5% of its forest in 3 years?",
-        "Simulate Brazil losing 15% forest cover by 2030",
-        "How much CO2 if Indonesia loses 8% forest in 5 years?"
-    ]
-    
-    return {
-        "original_query": query,
-        "suggestions": suggestions,
-        "example_queries": example_queries,
-        "has_components": {
-            "country": has_country,
-            "percentage": has_percentage,
-            "timeframe": has_time
-        }
-    }
-
-
-# Alternative model names to try if primary fails
-ALTERNATIVE_MODELS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro", 
-    "gemini-pro",
-    "models/gemini-1.5-flash",
-    "models/gemini-1.5-pro"
-]
-
-
-def parse_nl_query_with_fallback(query: str) -> Dict[str, Any]:
-    """
-    Parse NL query with fallback to alternative model names.
-    """
-    
-    last_error = None
-    
-    for model_name in ALTERNATIVE_MODELS:
-        try:
-            # Modify the original function to use different model
-            model = genai.GenerativeModel(model_name=model_name)
-            
-            prompt = f"""
-            Parse this forest loss query: "{query}"
-            
-            Return JSON with: country, forest_loss_percent (number), years (number)
-            
-            Example: {{"country": "Pakistan", "forest_loss_percent": 5, "years": 3}}
-            """
-            
-            response = model.generate_content(prompt)
-            
-            # If we get here, the model worked
-            print(f"Successfully used model: {model_name}")
-            
-            # Process the response (reuse logic from main function)
-            if hasattr(response, 'text') and response.text:
-                output_text = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                if hasattr(response.candidates[0], 'content'):
-                    output_text = response.candidates[0].content.parts[0].text
-                else:
-                    output_text = response.candidates[0].text
-            else:
-                continue
-            
-            cleaned_text = clean_json_response(output_text)
-            parsed = json.loads(cleaned_text)
-            
-            # Basic validation
-            if all(key in parsed for key in ["country", "forest_loss_percent", "years"]):
-                return {
-                    "status": "success", 
-                    "model_used": model_name,
-                    "structured_scenario": parsed
-                }
-                
-        except Exception as e:
-            last_error = str(e)
-            continue
-    
-    return {
-        "status": "error",
-        "error": f"All models failed. Last error: {last_error}",
-        "tried_models": ALTERNATIVE_MODELS
-    }
-
-
-# Debug function to test API and models
-def debug_gemini_api() -> Dict[str, Any]:
-    """
-    Debug function to test Gemini API configuration and available models.
-    """
-    debug_info = {
-        "api_key_configured": bool(settings.GEMINI_API_KEY),
-        "api_key_length": len(settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else 0,
-        "available_models": None,
-        "test_results": {}
-    }
-    
-    # Test listing models
-    try:
-        available_models = list_available_models()
-        debug_info["available_models"] = available_models
-    except Exception as e:
-        debug_info["available_models_error"] = str(e)
-    
-    # Test each model with a simple query
-    test_models = [
-        "models/gemini-2.0-flash",
-        "models/gemini-2.5-flash", 
-        "models/gemini-flash-latest",
-        "models/gemini-2.5-pro",
-        "models/gemini-pro-latest"
-    ]
-    
-    for model_name in test_models:
-        try:
-            model = genai.GenerativeModel(model_name=model_name)
-            response = model.generate_content("Say hello in JSON format: {\"message\": \"hello\"}")
-            
-            debug_info["test_results"][model_name] = {
-                "status": "success",
-                "response_available": bool(response),
-                "has_text": hasattr(response, 'text') and bool(response.text),
-                "has_candidates": hasattr(response, 'candidates') and bool(response.candidates)
-            }
-            
-        except Exception as e:
-            debug_info["test_results"][model_name] = {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    return debug_info
 if __name__ == "__main__":
     test_queries = [
-        "What if Pakistan loses 5% of forest in 3 years?",
-        "Brazil 10% deforestation by 2030",
-        "Indonesia forest loss 8% in 5 years"
+        "Show me Brazil's historical forest loss",
+        "What is Pakistan's deforestation data?",
+        "Brazil 10% deforestation by 2030"
     ]
     
     for query in test_queries:

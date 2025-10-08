@@ -6,7 +6,7 @@ const Header = () => {
 
   const navItems = [
     { path: '/', label: 'Home' },
-    { path: '/simulate', label: 'Simulate' },
+    { path: '/nlp', label: 'AI Query' },
     { path: '/timeseries', label: 'Time Series Maps' }
   ];
 
@@ -16,7 +16,7 @@ const Header = () => {
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
             <Link to="/" className="text-2xl font-bold text-forest-700">
-              🌲 Forest Impact Simulator
+              Forest Impact Simulator
             </Link>
           </div>
           
